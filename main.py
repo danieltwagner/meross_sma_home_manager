@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import math
 import os
 import requests
@@ -40,7 +41,7 @@ def set_last_power(device_id):
             "MaxPower": max(samples[device_id]),
         },
     }
-    r = requests.put(f"{SEMP2REST_ORIGIN}/api/devices/{device_id}/lastPower", data=payload)
+    r = requests.put(f"{SEMP2REST_ORIGIN}/api/devices/{device_id}/lastPower", data=json.dumps(payload), headers={"Content-Type":"application/json"})
     r.raise_for_status()
 
 
@@ -55,14 +56,15 @@ def register_device(dev):
            "maxPower": 3680,  # 230V 16A
            "emSignalsAccepted": False,
            "status": "On",  # On, Off, Offline
-           "vendor": Meross,
+           "vendor": "Meross",
            "serialNr": dev.uuid,
            "absoluteTimestamps": False,  # we don't accept scheduling events either way
            "optionalEnergy": False,
         },
     }
-    r = requests.post(f"{SEMP2REST_ORIGIN}/api/devices", data=payload)
-    r.raise_for_status()
+    r = requests.post(f"{SEMP2REST_ORIGIN}/api/devices", data=json.dumps(payload), headers={"Content-Type":"application/json"})
+    if r.status_code != 200:
+        print(f"Status {r.status_code} when creating device: {r.text}")
 
 
 async def main():
@@ -88,11 +90,14 @@ async def main():
                     sample_ts[device_id].pop(0)
                 
                 # TODO: might want to fetch these in parallel...
-                result = await dev.async_get_instant_metrics(timeout=POLL_TIMEOUT_S)
+                try:
+                    result = await dev.async_get_instant_metrics(timeout=POLL_TIMEOUT_S)
+                except Exception:
+                    continue
 
                 if result:
                     samples[device_id].append(result.power)
-                    sample_ts[device_id].append(result.sample_timestamp)
+                    sample_ts[device_id].append(result.sample_timestamp.timestamp())
 
                     # try updating lastPower, assuming device exists. Create the device if we get a 404 response
                     try:

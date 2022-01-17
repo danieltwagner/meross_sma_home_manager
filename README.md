@@ -5,7 +5,7 @@ You must run https://github.com/orlopau/semp and configure it as the SEMP2REST_O
 git clone https://github.com/danieltwagner/meross_sma_home_manager
 cd meross_sma_home_manager
 docker build -t meross .
-docker run -it --rm meross
+docker run -it --rm --name meross meross
 ```
 
 ## Running locally
