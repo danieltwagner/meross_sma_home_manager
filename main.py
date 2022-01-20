@@ -19,6 +19,7 @@ load_dotenv()
 EMAIL = os.environ.get('MEROSS_EMAIL')
 PASSWORD = os.environ.get('MEROSS_PASSWORD')
 POLL_FREQUENCY_S = float(os.environ.get('MEROSS_POLL_FREQUENCY_S') or 10)
+RECONNECT_TIME_S = float(os.environ.get('MEROSS_RECONNECT_TIME_S') or 30)
 
 SEMP2REST_ORIGIN = os.environ.get('SEMP2REST_ORIGIN')
 
@@ -26,7 +27,6 @@ POLL_TIMEOUT_S = 1
 
 samples = defaultdict(list)
 sample_ts = defaultdict(list)
-
 
 def device_id_from_uuid(uuid, channel):
     serial = hashlib.md5(uuid.encode('utf-8')).hexdigest()[:12]
@@ -67,12 +67,15 @@ def register_device(dev):
         print(f"Status {r.status_code} when creating device: {r.text}")
 
 
-async def main():
-    # Setup the HTTP client API from user-password
-    http_api_client = await MerossHttpClient.async_from_user_password(email=EMAIL, password=PASSWORD)
+async def connect_and_forward():
+    """
+    Connects MerossIot and forwards readings via SEMP2REST.
+    Exits after no new measurement has been received for RECONNECT_TIME_S seconds
+    """
 
-    # Setup and start the device manager
+    http_api_client = await MerossHttpClient.async_from_user_password(email=EMAIL, password=PASSWORD)
     manager = MerossManager(http_client=http_api_client)
+    last_measurement = time.time()
     try:
         await manager.async_init()
 
@@ -80,7 +83,7 @@ async def main():
         await manager.async_device_discovery()
         devs = manager.find_devices(device_class=ElectricityMixin)
 
-        while True:
+        while time.time() - last_measurement < RECONNECT_TIME_S:
             start = time.time()
             for dev in devs:
                 device_id = device_id_from_uuid(dev.uuid, 0)
@@ -96,6 +99,7 @@ async def main():
                     continue
 
                 if result:
+                    last_measurement = time.time()
                     samples[device_id].append(result.power)
                     sample_ts[device_id].append(result.sample_timestamp.timestamp())
 
@@ -118,6 +122,14 @@ async def main():
         manager.close()
         await http_api_client.async_logout()
 
+
+async def main():
+    while True:
+        try:
+            await connect_and_forward()
+        except Exception as e:
+            # just print and struggle on
+            print(e)
 
 if __name__ == '__main__':
     # Windows and python 3.8 requires to set up a specific event_loop_policy.
