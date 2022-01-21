@@ -9,6 +9,13 @@ import time
 
 from collections import defaultdict
 
+# Configure logging before initializing meross iot so we get timestamps
+import logging
+logging.basicConfig(
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    level=logging.INFO,
+    datefmt='%Y-%m-%d %H:%M:%S')
+
 from meross_iot.controller.mixins.electricity import ElectricityMixin
 from meross_iot.http_api import MerossHttpClient
 from meross_iot.manager import MerossManager
@@ -64,7 +71,7 @@ def register_device(dev):
     }
     r = requests.post(f"{SEMP2REST_ORIGIN}/api/devices", data=json.dumps(payload), headers={"Content-Type":"application/json"})
     if r.status_code != 200:
-        print(f"Status {r.status_code} when creating device: {r.text}")
+        logging.warn(f"Status {r.status_code} when creating device: {r.text}")
 
 
 async def connect_and_forward():
@@ -110,10 +117,10 @@ async def connect_and_forward():
                         if e.response.status_code == 404:
                             register_device(dev)
                         else:
-                            print(e)
+                            logging.warn(e)
                     except Exception as e:
                         # just print and struggle on
-                        print(e)
+                        logging.warn(e)
 
             await asyncio.sleep(POLL_FREQUENCY_S - (time.time() - start))
 
@@ -129,7 +136,7 @@ async def main():
             await connect_and_forward()
         except Exception as e:
             # just print and struggle on
-            print(e)
+            logging.warn(e)
 
 if __name__ == '__main__':
     # Windows and python 3.8 requires to set up a specific event_loop_policy.
