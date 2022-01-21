@@ -27,7 +27,8 @@ EMAIL = os.environ.get('MEROSS_EMAIL')
 PASSWORD = os.environ.get('MEROSS_PASSWORD')
 POLL_FREQUENCY_S = float(os.environ.get('MEROSS_POLL_FREQUENCY_S') or 10)
 RECONNECT_TIME_S = float(os.environ.get('MEROSS_RECONNECT_TIME_S') or 30)
-STATUS_PRINT_S = float(os.environ.get('MEROSS_STATUS_PRINT_S') or 3600)
+STATUS_PRINT_FREQ_S = float(os.environ.get('MEROSS_STATUS_PRINT_FREQ_S') or 3600)
+DISCOVER_FREQ_S = float(os.environ.get('MEROSS_DISCOVER_FREQ_S') or 3600)
 
 SEMP2REST_ORIGIN = os.environ.get('SEMP2REST_ORIGIN')
 
@@ -74,62 +75,74 @@ def register_device(dev):
     if r.status_code != 200:
         logging.warning(f"Status {r.status_code} when creating device: {r.text}")
 
+async def fetch_and_update_device(dev):
+    device_id = device_id_from_uuid(dev.uuid, 0)
+
+    while len(sample_ts[device_id]) > 0 and sample_ts[device_id][0] < time.time() - 60:
+        samples[device_id].pop(0)
+        sample_ts[device_id].pop(0)
+    
+    try:
+        result = await dev.async_get_instant_metrics(timeout=POLL_TIMEOUT_S)
+    except Exception:
+        return None
+
+    if result:
+        samples[device_id].append(result.power)
+        sample_ts[device_id].append(result.sample_timestamp.timestamp())
+
+        # try updating lastPower, assuming device exists. Create the device if we get a 404 response
+        try:
+            set_last_power(device_id)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                register_device(dev)
+            else:
+                logging.warning(e)
+        except Exception as e:
+            # just print and struggle on
+            logging.warning(e)
+
+    return result
 
 async def connect_and_forward():
     """
     Connects MerossIot and forwards readings via SEMP2REST.
     Exits after no new measurement has been received for RECONNECT_TIME_S seconds
     """
+    last_measurement = time.time()
+    last_status_print = 0
+    last_device_update = 0
+    devs = []
 
     http_api_client = await MerossHttpClient.async_from_user_password(email=EMAIL, password=PASSWORD)
     manager = MerossManager(http_client=http_api_client)
-    last_measurement = time.time()
-    last_status_print = 0
     try:
         await manager.async_init()
 
-        # Retrieve all the MSS310 devices that are registered on this account
-        await manager.async_device_discovery()
-        devs = manager.find_devices(device_class=ElectricityMixin)
-
         while time.time() - last_measurement < RECONNECT_TIME_S:
             start = time.time()
+
+            # periodically retrieve devices registered on this account
+            if time.time() - last_device_update > DISCOVER_FREQ_S:
+                await manager.async_device_discovery()
+                devs = manager.find_devices(device_class=ElectricityMixin)
+                last_device_update = time.time()
+
+            updates = []
             for dev in devs:
-                device_id = device_id_from_uuid(dev.uuid, 0)
-
-                while len(sample_ts[device_id]) > 0 and sample_ts[device_id][0] < start - 60:
-                    samples[device_id].pop(0)
-                    sample_ts[device_id].pop(0)
-                
                 # TODO: might want to fetch these in parallel...
-                try:
-                    result = await dev.async_get_instant_metrics(timeout=POLL_TIMEOUT_S)
-                except Exception:
-                    continue
-
+                result = await fetch_and_update_device(dev)
                 if result:
                     last_measurement = time.time()
-                    samples[device_id].append(result.power)
-                    sample_ts[device_id].append(result.sample_timestamp.timestamp())
 
-                    # try updating lastPower, assuming device exists. Create the device if we get a 404 response
-                    try:
-                        set_last_power(device_id)
-                    except requests.exceptions.HTTPError as e:
-                        if e.response.status_code == 404:
-                            register_device(dev)
-                        else:
-                            logging.warning(e)
-                    except Exception as e:
-                        # just print and struggle on
-                        logging.warning(e)
-
-            # output 
-            if STATUS_PRINT_S > 0 and time.time() - last_status_print > STATUS_PRINT_S:
+            # periodically print stats
+            if STATUS_PRINT_FREQ_S > 0 and time.time() - last_status_print > STATUS_PRINT_FREQ_S:
                 logging.info("Device status")
-                for device_id, vals in samples.items():
-                    avg_watt = sum(vals)/len(vals)
-                    logging.info(f"  {device_id}: {avg_watt:7.2f} W")
+                for dev in devs:
+                    device_id = device_id_from_uuid(dev.uuid, 0)
+                    avg_watt = sum(samples[device_id])/len(samples[device_id])
+                    logging.info(f"  {dev.name} ({device_id}): {avg_watt:7.2f} W")
                 last_status_print = time.time()
             
             await asyncio.sleep(POLL_FREQUENCY_S - (time.time() - start))
