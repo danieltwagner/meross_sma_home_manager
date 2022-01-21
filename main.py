@@ -27,6 +27,7 @@ EMAIL = os.environ.get('MEROSS_EMAIL')
 PASSWORD = os.environ.get('MEROSS_PASSWORD')
 POLL_FREQUENCY_S = float(os.environ.get('MEROSS_POLL_FREQUENCY_S') or 10)
 RECONNECT_TIME_S = float(os.environ.get('MEROSS_RECONNECT_TIME_S') or 30)
+STATUS_PRINT_S = float(os.environ.get('MEROSS_STATUS_PRINT_S') or 3600)
 
 SEMP2REST_ORIGIN = os.environ.get('SEMP2REST_ORIGIN')
 
@@ -71,7 +72,7 @@ def register_device(dev):
     }
     r = requests.post(f"{SEMP2REST_ORIGIN}/api/devices", data=json.dumps(payload), headers={"Content-Type":"application/json"})
     if r.status_code != 200:
-        logging.warn(f"Status {r.status_code} when creating device: {r.text}")
+        logging.warning(f"Status {r.status_code} when creating device: {r.text}")
 
 
 async def connect_and_forward():
@@ -83,6 +84,7 @@ async def connect_and_forward():
     http_api_client = await MerossHttpClient.async_from_user_password(email=EMAIL, password=PASSWORD)
     manager = MerossManager(http_client=http_api_client)
     last_measurement = time.time()
+    last_status_print = 0
     try:
         await manager.async_init()
 
@@ -117,11 +119,19 @@ async def connect_and_forward():
                         if e.response.status_code == 404:
                             register_device(dev)
                         else:
-                            logging.warn(e)
+                            logging.warning(e)
                     except Exception as e:
                         # just print and struggle on
-                        logging.warn(e)
+                        logging.warning(e)
 
+            # output 
+            if STATUS_PRINT_S > 0 and time.time() - last_status_print > STATUS_PRINT_S:
+                logging.info("Device status")
+                for device_id, vals in samples.items():
+                    avg_watt = sum(vals)/len(vals)
+                    logging.info(f"  {device_id}: {avg_watt:7.2f} W")
+                last_status_print = time.time()
+            
             await asyncio.sleep(POLL_FREQUENCY_S - (time.time() - start))
 
     finally:
@@ -136,7 +146,7 @@ async def main():
             await connect_and_forward()
         except Exception as e:
             # just print and struggle on
-            logging.warn(e)
+            logging.warning(e)
 
 if __name__ == '__main__':
     # Windows and python 3.8 requires to set up a specific event_loop_policy.
