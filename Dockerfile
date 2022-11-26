@@ -1,6 +1,6 @@
-FROM python:3.10-slim-buster
+FROM python:3.11-alpine
 
-RUN apt-get update && apt-get install --no-install-recommends -y gcc g++ libffi-dev libstdc++-8-dev
+RUN apk update && apk add --no-cache gcc g++ libffi-dev
 
 WORKDIR /usr/src/app
 COPY requirements.txt ./
