@@ -135,6 +135,8 @@ class MerossSMA(object):
         Connects MerossIot and forwards readings via SEMP2REST.
         Exits after no new measurement has been received for RECONNECT_TIME_S seconds
         """
+        self.connection_status_by_dev_id = defaultdict(lambda: OnlineStatus.ONLINE)  # type: Dict[str, OnlineStatus]
+        self.disconnection_detected = False
         last_measurement = time.time()
         last_status_print = 0.0
         last_device_update = 0.0
@@ -144,9 +146,6 @@ class MerossSMA(object):
         manager = MerossManager(http_client=http_api_client)
         try:
             manager.register_push_notification_handler_coroutine(self.handle_push_notification)
-
-            connection_status_by_dev_id = defaultdict(lambda: OnlineStatus.ONLINE)  # type: Dict[str, OnlineStatus]
-            disconnection_detected = False
             logging.info("Entering main loop...")
 
             while (time.time() - last_measurement < RECONNECT_TIME_S) and (not self.disconnection_detected):
